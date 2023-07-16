@@ -32,7 +32,8 @@ import tilelog.country
 @click.option('--country', type=click.File('w', encoding='utf-8'),
               help="File with country-level statistics")
 def cli(date, staging, generate_success, region, tile, host, app, country):
-    click.echo("Generating files for {}".format(date.strftime("%Y-%m-%d")))
+    date_str = date.strftime("%Y-%m-%d")
+    click.echo(f"Generating files for {date_str}")
     with pyathena.connect(s3_staging_dir=staging, region_name=region,
                           cursor_class=ArrowCursor).cursor() as curs:
 
@@ -52,7 +53,8 @@ def cli(date, staging, generate_success, region, tile, host, app, country):
 
 def tile_logs(curs, date, dest):
     click.echo("Querying for tile usage")
-    query = """
+    tablename=tilelog.constants.FASTLY_PARQET_LOGS
+    query = f"""
 SELECT z, x, y,
         COUNT(*)
 FROM {tablename}
@@ -63,15 +65,17 @@ GROUP BY z, x, y
 HAVING COUNT(DISTINCT ip) >= %(min_distinct)d
     AND COUNT(*) >= %(min_requests)d
 ORDER BY z, x, y
-    """.format(tablename=tilelog.constants.FASTLY_PARQET_LOGS)
-    curs.execute(query, {"year": date.year, "month": date.month,
+    """
+    curs.execute(query, {"year": date.year, 
+                         "month": date.month,
                          "day": date.day,
                          "min_distinct": tilelog.constants.MIN_DISTINCT_TILE_REQUESTS,
                          "min_requests": tilelog.constants.MIN_TILE_REQUESTS})
     click.echo("Writing tile usage to file")
     with lzma.open(dest, "w") as file:
         for tile in curs:
-            file.write("{}/{}/{} {}\n".format(tile[0], tile[1], tile[2], tile[3]).encode('ascii'))
+            tile_0,tile_1,tile_2,tile_3 = tile[0],tile[1],tile[2],tile[3] 
+            file.write(f"{tile_0}/{tile_1}/{tile_2} {tile_3}\n").encode('ascii')
 
 
 psl = PublicSuffixList()
@@ -95,7 +99,8 @@ def normalize_host(host):
 
 def host_logs(curs, date, dest):
     click.echo("Querying for host usage")
-    query = """
+    tablename = tilelog.constants.FASTLY_PARQET_LOGS
+    query = f"""
 SELECT
 host,
 cast(count(*) as double)/86400 AS tps,
@@ -113,7 +118,7 @@ WHERE year = %(year)d
     ) AS stripped_referers
 GROUP BY host
 ORDER BY COUNT(*) DESC;
-    """.format(tablename=tilelog.constants.FASTLY_PARQET_LOGS)
+    """
     curs.execute(query, {"year": date.year, "month": date.month,
                          "day": date.day})
 
@@ -140,7 +145,8 @@ ORDER BY COUNT(*) DESC;
 
 def app_logs(curs, date, dest):
     click.echo("Querying for app usage")
-    query = r"""
+    tablename=tilelog.constants.FASTLY_PARQET_LOGS
+    query = fr"""
 SELECT
 app,
 cast(count(*) as double)/86400 AS tps,
@@ -161,7 +167,7 @@ FROM (
     WHEN useragent LIKE 'flutter_map (%%)' THEN 'flutter_map (*)'
 
     -- Extract app name from foo.bar/123.456
-    WHEN regexp_like(useragent, '^([^./]+(\.[^./]+)*)/\d+(\.\d+)*$') THEN regexp_extract(useragent, '^([^./]+(\.[^./]+)*)/\d+(\.\d+)*$', 1) || '/*'
+    'WHEN regexp_like(useragent, '^([^./]+(\.[^./]+)*)/\d+(\.\d+)*$') THEN regexp_extract(useragent, '^([^./]+(\.[^./]+)*)/\d+(\.\d+)*$', 1) || '/*'
     -- Some apps have extra stuff after the name/version
     WHEN regexp_like(useragent, '^([^/ ]+)(/[^/ ]+) CFNetwork/[^/ ]+ Darwin/[^/ ]+$') THEN regexp_extract(useragent, '^([^/ ]+)(/[^/ ]+) CFNetwork/[^/ ]+ Darwin/[^/ ]+$', 1) || '/* CFNetwork/* Darwin/*'
     -- Mapbox apps follow the pattern Bikemap/22.0.2 Mapbox/5.13.0-pre.1 MapboxGL/0.0.0 (c6fb3581) iOS/15.5.0 (arm64)
@@ -184,7 +190,7 @@ WHERE year = %(year)d
 GROUP BY app
 HAVING COUNT(*) > %(tps)d*86400
 ORDER BY COUNT(*) DESC
-    """.format(tablename=tilelog.constants.FASTLY_PARQET_LOGS)  # noqa: E501
+    """  # noqa: E501
 
     curs.execute(query, {"year": date.year, "month": date.month,
                          "day": date.day, "tps": tilelog.constants.MIN_TPS})
